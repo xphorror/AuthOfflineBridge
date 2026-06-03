@@ -2,9 +2,10 @@
   "required": true,
   "minVersion": "0.8",
   "package": "com.authofflinebridge.mixin",
-  "compatibilityLevel": "JAVA_8",
+  "compatibilityLevel": "JAVA_17",
   "refmap": "authofflinebridge.refmap.json",
   "mixins": [
+    "PlayerLoginMixin"
   ],
   "client": [
   ],
