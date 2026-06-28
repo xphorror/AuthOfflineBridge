@@ -71,7 +71,7 @@ public final class UserCacheLoader {
                 String uuidStr = entry.getValue().getAsString();
                 try {
                     UUID uuid = UUID.fromString(uuidStr);
-                    cachedOnlineMap.put(name, uuid);
+                    cacheMapping(name, uuid, "manual config");
                     count++;
                 } catch (IllegalArgumentException e) {
                     Authofflinebridge.LOGGER.warn("Invalid UUID '{}' for player '{}' in manual config", uuidStr, name);
@@ -106,7 +106,7 @@ public final class UserCacheLoader {
                 }
 
                 if (!cachedOnlineMap.containsKey(name)) {
-                    cachedOnlineMap.put(name, uuid);
+                    cacheMapping(name, uuid, "usercache.json");
                     count++;
                 }
             }
@@ -143,7 +143,7 @@ public final class UserCacheLoader {
 
         Optional<UUID> fetchedUUID = fetchOnlineUUID(playerName);
         fetchedUUID.ifPresent(uuid -> {
-            cachedOnlineMap.put(playerName, uuid);
+            cacheMapping(playerName, uuid, "Mojang API");
             persistFetchedMapping(playerName, uuid);
         });
         return fetchedUUID;
@@ -151,6 +151,28 @@ public final class UserCacheLoader {
 
     public static UUID getOfflineUUID(String playerName) {
         return UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void cacheMapping(String playerName, UUID uuid, String source) {
+        findExistingName(uuid, playerName).ifPresent(existingName ->
+                Authofflinebridge.LOGGER.warn(
+                        "Names '{}' and '{}' both map to online UUID {} from {}. This may be a Mojang name change; player data is keyed by UUID.",
+                        existingName,
+                        playerName,
+                        uuid,
+                        source
+                )
+        );
+        cachedOnlineMap.put(playerName, uuid);
+    }
+
+    private static Optional<String> findExistingName(UUID uuid, String currentName) {
+        for (Map.Entry<String, UUID> entry : cachedOnlineMap.entrySet()) {
+            if (!entry.getKey().equals(currentName) && entry.getValue().equals(uuid)) {
+                return Optional.of(entry.getKey());
+            }
+        }
+        return Optional.empty();
     }
 
     private static Optional<UUID> fetchOnlineUUID(String playerName) {
@@ -279,21 +301,22 @@ public final class UserCacheLoader {
         try {
             Files.createDirectories(directory);
 
-            if (Files.exists(target)) {
-                if (Files.mismatch(source, target) == -1L) {
-                    Files.writeString(marker, "Already matched " + source.getFileName() + System.lineSeparator(), StandardCharsets.UTF_8);
-                    return;
-                }
-
-                Path backup = directory.resolve(onlineFileName + ".authofflinebridge.bak");
-                if (Files.exists(backup)) {
-                    backup = directory.resolve(onlineFileName + ".authofflinebridge." + System.currentTimeMillis() + ".bak");
-                }
-                Files.copy(target, backup, StandardCopyOption.COPY_ATTRIBUTES);
-                Authofflinebridge.LOGGER.info("Backed up existing {} for {} to {}", label, playerName, backup);
+            if (Files.exists(target) && Files.mismatch(source, target) == -1L) {
+                Files.writeString(marker, "Already matched " + source.getFileName() + System.lineSeparator(), StandardCharsets.UTF_8);
+                return;
             }
 
-            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
+            if (Files.exists(target)) {
+                Authofflinebridge.LOGGER.warn(
+                        "Skipped offline {} migration for {} because target already exists: {}. Remove or back up the target file manually if you really want to replace it.",
+                        label,
+                        playerName,
+                        target
+                );
+                return;
+            }
+
+            Files.copy(source, target, StandardCopyOption.COPY_ATTRIBUTES);
             Files.writeString(marker, "Copied from " + source.getFileName() + System.lineSeparator(), StandardCharsets.UTF_8);
             Authofflinebridge.LOGGER.info("Copied offline {} for {} from {} to {}", label, playerName, source, target);
         } catch (IOException e) {

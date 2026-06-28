@@ -86,11 +86,9 @@ world/advancements/<离线UUID>.json -> world/advancements/<正版UUID>.json
 world/stats/<离线UUID>.json -> world/stats/<正版UUID>.json
 ```
 
-如果正版 UUID 文件已经存在，模组会先创建备份：
+如果正版 UUID 文件已经存在，模组不会覆盖它。这样可以避免玩家改名、手动别名或多个昵称映射到同一 UUID 时，后登录的昵称把同一个正版 UUID 的真实数据覆盖掉。
 
-```text
-<正版UUID>.dat.authofflinebridge.bak
-```
+如果你确认要用离线 UUID 文件替换正版 UUID 文件，请先停止服务器，手动备份或删除目标正版 UUID 文件，再重新进服触发迁移。
 
 复制完成后会写入一次性标记：
 
@@ -100,7 +98,21 @@ world/stats/<离线UUID>.json -> world/stats/<正版UUID>.json
 
 只要标记存在，后续登录不会反复用旧离线数据覆盖新的正版 UUID 数据。
 
-如果确实需要重新迁移，停止服务器后删除对应的 `.authofflinebridge.migrated` 文件，再重新进服。
+如果确实需要重新迁移，停止服务器后删除对应的 `.authofflinebridge.migrated` 文件，并确认目标正版 UUID 文件不存在或已经手动备份，再重新进服。
+
+## 改名和同 UUID 多昵称
+
+正版账号的 UUID 不会随着玩家改名而改变。玩家改名后，只要使用当前正版昵称进服，官方 API 会返回同一个正版 UUID。
+
+如果配置文件或缓存中出现多个昵称指向同一个正版 UUID，模组会打印警告，但不会崩溃：
+
+```text
+Names 'OldName' and 'NewName' both map to online UUID ...
+```
+
+这种情况通常表示玩家改过名，或你手动配置了别名。玩家数据最终按正版 UUID 归档，而不是按昵称归档。
+
+需要注意：在 `online-mode=false` 下，任何人都可以输入这些昵称之一连接服务器。这个模组只负责 UUID 映射和数据迁移，不负责证明连接者拥有该正版账号。
 
 ## 手动配置
 
@@ -124,6 +136,7 @@ server_directory/config/authofflinebridge-uuids.json
 - value 是玩家的正版 UUID。
 - 以下划线开头的字段会被当作注释或示例跳过。
 - 手动配置优先级高于 `usercache.json`。
+- 可以配置多个昵称指向同一个正版 UUID，用于兼容改名前后的名字；模组会记录警告，但数据只会归到同一个正版 UUID。
 
 ## 日志判断
 
