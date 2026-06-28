@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
-import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Mixin(ServerLoginPacketListenerImpl.class)
@@ -30,10 +30,10 @@ public class PlayerLoginMixin {
             )
     )
     private GameProfile authofflinebridge$replaceOfflineUUID(String playerName) {
-        Map<String, UUID> onlineMap = UserCacheLoader.getOnlineUUIDMap();
-        UUID onlineUUID = onlineMap.get(playerName);
+        Optional<UUID> resolvedUUID = UserCacheLoader.resolveOnlineUUID(playerName);
 
-        if (onlineUUID != null) {
+        if (resolvedUUID.isPresent()) {
+            UUID onlineUUID = resolvedUUID.get();
             UserCacheLoader.migrateOfflinePlayerFiles(this.server, playerName, onlineUUID);
             Authofflinebridge.LOGGER.info("Replaced offline UUID with online UUID for {}: {}", playerName, onlineUUID);
             return new GameProfile(onlineUUID, playerName);

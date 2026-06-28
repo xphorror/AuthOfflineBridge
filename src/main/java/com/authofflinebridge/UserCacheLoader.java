@@ -2,28 +2,45 @@ package com.authofflinebridge;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class UserCacheLoader {
 
+    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(3))
+            .build();
+    private static final Duration PROFILE_LOOKUP_TIMEOUT = Duration.ofSeconds(5);
+    private static final String PROFILE_LOOKUP_URL = "https://api.minecraftservices.com/minecraft/profile/lookup/name/";
+    private static final String LEGACY_PROFILE_LOOKUP_URL = "https://api.mojang.com/users/profiles/minecraft/";
+
     private static Map<String, UUID> cachedOnlineMap = new LinkedHashMap<>();
+    private static Path manualConfigFile;
 
     private UserCacheLoader() {
     }
 
     public static void init(Path userCacheFile, Path manualConfigFile) {
+        UserCacheLoader.manualConfigFile = manualConfigFile;
         cachedOnlineMap = new LinkedHashMap<>();
 
         loadManualConfig(manualConfigFile);
@@ -118,8 +135,106 @@ public final class UserCacheLoader {
         return cachedOnlineMap;
     }
 
+    public static synchronized Optional<UUID> resolveOnlineUUID(String playerName) {
+        UUID cachedUUID = cachedOnlineMap.get(playerName);
+        if (cachedUUID != null) {
+            return Optional.of(cachedUUID);
+        }
+
+        Optional<UUID> fetchedUUID = fetchOnlineUUID(playerName);
+        fetchedUUID.ifPresent(uuid -> {
+            cachedOnlineMap.put(playerName, uuid);
+            persistFetchedMapping(playerName, uuid);
+        });
+        return fetchedUUID;
+    }
+
     public static UUID getOfflineUUID(String playerName) {
         return UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static Optional<UUID> fetchOnlineUUID(String playerName) {
+        Optional<UUID> servicesResult = fetchOnlineUUID(playerName, PROFILE_LOOKUP_URL);
+        if (servicesResult.isPresent()) {
+            return servicesResult;
+        }
+
+        return fetchOnlineUUID(playerName, LEGACY_PROFILE_LOOKUP_URL);
+    }
+
+    private static Optional<UUID> fetchOnlineUUID(String playerName, String endpoint) {
+        String encodedName = URLEncoder.encode(playerName, StandardCharsets.UTF_8);
+        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint + encodedName))
+                .timeout(PROFILE_LOOKUP_TIMEOUT)
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+
+        try {
+            HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() == 204 || response.statusCode() == 404) {
+                Authofflinebridge.LOGGER.info("No Mojang profile found for {}", playerName);
+                return Optional.empty();
+            }
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                Authofflinebridge.LOGGER.warn("Mojang profile lookup for {} returned HTTP {}", playerName, response.statusCode());
+                return Optional.empty();
+            }
+
+            JsonObject obj = JsonParser.parseString(response.body()).getAsJsonObject();
+            if (!obj.has("id")) {
+                Authofflinebridge.LOGGER.warn("Mojang profile lookup for {} returned no UUID", playerName);
+                return Optional.empty();
+            }
+
+            UUID uuid = parseMojangUUID(obj.get("id").getAsString());
+            Authofflinebridge.LOGGER.info("Fetched online UUID for {} from Mojang API: {}", playerName, uuid);
+            return Optional.of(uuid);
+        } catch (Exception e) {
+            Authofflinebridge.LOGGER.warn("Failed to fetch online UUID for {} from {}", playerName, endpoint, e);
+            return Optional.empty();
+        }
+    }
+
+    private static UUID parseMojangUUID(String value) {
+        if (value.length() == 36) {
+            return UUID.fromString(value);
+        }
+        if (value.length() != 32) {
+            throw new IllegalArgumentException("Expected 32 or 36 character UUID, got: " + value);
+        }
+
+        String hyphenated = value.substring(0, 8)
+                + "-" + value.substring(8, 12)
+                + "-" + value.substring(12, 16)
+                + "-" + value.substring(16, 20)
+                + "-" + value.substring(20);
+        return UUID.fromString(hyphenated);
+    }
+
+    private static void persistFetchedMapping(String playerName, UUID uuid) {
+        if (manualConfigFile == null) {
+            return;
+        }
+
+        try {
+            JsonObject obj;
+            if (Files.exists(manualConfigFile)) {
+                String content = Files.readString(manualConfigFile, StandardCharsets.UTF_8);
+                obj = JsonParser.parseString(content).getAsJsonObject();
+            } else {
+                Files.createDirectories(manualConfigFile.getParent());
+                obj = new JsonObject();
+                obj.addProperty("_comment", "Add player name -> online UUID mappings here. UUID must be the player's Mojang online UUID.");
+            }
+
+            obj.addProperty(playerName, uuid.toString());
+            String output = new GsonBuilder().setPrettyPrinting().create().toJson(obj) + System.lineSeparator();
+            Files.writeString(manualConfigFile, output, StandardCharsets.UTF_8);
+            Authofflinebridge.LOGGER.info("Cached fetched online UUID for {} in {}", playerName, manualConfigFile);
+        } catch (Exception e) {
+            Authofflinebridge.LOGGER.warn("Failed to cache fetched online UUID for {} in {}", playerName, manualConfigFile, e);
+        }
     }
 
     public static void migrateOfflinePlayerFiles(MinecraftServer server, String playerName, UUID onlineUUID) {
