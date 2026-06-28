@@ -4,6 +4,8 @@ Fabric 服务端模组。用于在 `online-mode=false` 时，把玩家的离线 
 
 支持长期关闭正版验证的服务器：只要服务器能访问 Mojang 官方 API，模组就能按玩家名自动查询正版 UUID 并缓存到本地。
 
+原作者仓库：https://github.com/taisuiyileba/AuthOfflineBridge
+
 ## 版本
 
 - Minecraft `26.1.2`
