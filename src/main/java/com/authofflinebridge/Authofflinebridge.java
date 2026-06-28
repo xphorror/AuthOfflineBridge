@@ -1,31 +1,26 @@
 package com.authofflinebridge;
 
-import com.mojang.logging.LogUtils;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.event.server.ServerStartingEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.ModLoadingContext;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.config.ModConfig;
+import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-@Mod(Authofflinebridge.MODID)
-public class Authofflinebridge {
+public class Authofflinebridge implements ModInitializer {
 
     public static final String MODID = "authofflinebridge";
-    private static final Logger LOGGER = LogUtils.getLogger();
+    public static final Logger LOGGER = LoggerFactory.getLogger(MODID);
 
-    public Authofflinebridge() {
-        MinecraftForge.EVENT_BUS.register(this);
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, Config.SPEC);
-    }
+    @Override
+    public void onInitialize() {
+        ServerLifecycleEvents.SERVER_STARTING.register(server -> {
+            var serverDir = server.getServerDirectory();
+            var userCacheFile = serverDir.resolve("usercache.json");
+            var manualConfigFile = serverDir.resolve("config").resolve("authofflinebridge-uuids.json");
 
-    @SubscribeEvent
-    public void onServerStarting(ServerStartingEvent event) {
-        var serverDir = event.getServer().getServerDirectory().toPath();
-        var userCacheFile = serverDir.resolve("usercache.json");
-        var manualConfigFile = serverDir.resolve("config").resolve("authofflinebridge-uuids.json");
-        UserCacheLoader.init(userCacheFile, manualConfigFile);
-        UserCacheLoader.printMappings();
+            UserCacheLoader.init(userCacheFile, manualConfigFile);
+            UserCacheLoader.printMappings();
+        });
+
+        OfflineBridgeHandler.register();
     }
 }

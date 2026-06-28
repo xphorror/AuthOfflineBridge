@@ -4,55 +4,39 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.mojang.logging.LogUtils;
-import org.slf4j.Logger;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.nio.file.StandardCopyOption;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 
-/**
- * 加载并缓存玩家名与正版UUID的映射关系。
- * 优先级：手动配置文件 > usercache.json
- */
-public class UserCacheLoader {
+public final class UserCacheLoader {
 
-    private static final Logger LOGGER = LogUtils.getLogger();
-
-    /** 缓存的 name → 正版UUID 映射 */
     private static Map<String, UUID> cachedOnlineMap = new LinkedHashMap<>();
 
-    /**
-     * 初始化：先加载手动配置文件，再加载 usercache.json。
-     * 手动配置优先级更高。
-     *
-     * @param userCacheFile usercache.json 路径
-     * @param manualConfigFile 手动UUID映射文件路径 (config/authofflinebridge-uuids.json)
-     */
+    private UserCacheLoader() {
+    }
+
     public static void init(Path userCacheFile, Path manualConfigFile) {
         cachedOnlineMap = new LinkedHashMap<>();
 
-        // 1. 先加载手动配置文件（优先级最高）
         loadManualConfig(manualConfigFile);
-
-        // 2. 再加载 usercache.json（不覆盖手动配置）
         loadUserCache(userCacheFile);
 
-        // 3. 如果没有手动配置文件，自动创建模板
         if (!Files.exists(manualConfigFile)) {
             createTemplateConfig(manualConfigFile);
         }
     }
 
-    /**
-     * 加载手动UUID映射配置文件。
-     * 格式：{"playerName": "uuid-v4", ...}
-     */
     private static void loadManualConfig(Path configFile) {
         if (!Files.exists(configFile)) {
-            LOGGER.info("[AuthOfflineBridge] Manual UUID config not found at: {}, will create template", configFile);
+            Authofflinebridge.LOGGER.info("Manual UUID config not found at: {}, will create template", configFile);
             return;
         }
 
@@ -63,28 +47,29 @@ public class UserCacheLoader {
             int count = 0;
             for (var entry : obj.entrySet()) {
                 String name = entry.getKey();
+                if (name.startsWith("_")) {
+                    continue;
+                }
+
                 String uuidStr = entry.getValue().getAsString();
                 try {
                     UUID uuid = UUID.fromString(uuidStr);
-                    cachedOnlineMap.put(name, uuid); // 手动配置直接覆盖
+                    cachedOnlineMap.put(name, uuid);
                     count++;
                 } catch (IllegalArgumentException e) {
-                    LOGGER.warn("[AuthOfflineBridge] Invalid UUID '{}' for player '{}' in manual config", uuidStr, name);
+                    Authofflinebridge.LOGGER.warn("Invalid UUID '{}' for player '{}' in manual config", uuidStr, name);
                 }
             }
 
-            LOGGER.info("[AuthOfflineBridge] Loaded {} manual UUID mappings from {}", count, configFile);
+            Authofflinebridge.LOGGER.info("Loaded {} manual UUID mappings from {}", count, configFile);
         } catch (Exception e) {
-            LOGGER.error("[AuthOfflineBridge] Failed to read manual UUID config: {}", configFile, e);
+            Authofflinebridge.LOGGER.error("Failed to read manual UUID config: {}", configFile, e);
         }
     }
 
-    /**
-     * 从 usercache.json 加载映射（跳过离线UUID，不覆盖手动配置）。
-     */
     private static void loadUserCache(Path userCacheFile) {
         if (!Files.exists(userCacheFile)) {
-            LOGGER.warn("[AuthOfflineBridge] usercache.json not found at: {}", userCacheFile);
+            Authofflinebridge.LOGGER.warn("usercache.json not found at: {}", userCacheFile);
             return;
         }
 
@@ -99,62 +84,116 @@ public class UserCacheLoader {
                 String uuidStr = obj.get("uuid").getAsString();
                 UUID uuid = UUID.fromString(uuidStr);
 
-                // 跳过离线UUID（version 3）
-                if (uuid.version() == 3) continue;
+                if (uuid.version() == 3) {
+                    continue;
+                }
 
-                // 不覆盖手动配置中已有的映射
                 if (!cachedOnlineMap.containsKey(name)) {
                     cachedOnlineMap.put(name, uuid);
                     count++;
                 }
             }
 
-            LOGGER.info("[AuthOfflineBridge] Loaded {} online UUID mappings from usercache.json", count);
+            Authofflinebridge.LOGGER.info("Loaded {} online UUID mappings from usercache.json", count);
         } catch (Exception e) {
-            LOGGER.error("[AuthOfflineBridge] Failed to read usercache.json", e);
+            Authofflinebridge.LOGGER.error("Failed to read usercache.json", e);
         }
     }
 
-    /**
-     * 创建模板配置文件，方便用户手动添加UUID映射。
-     */
     private static void createTemplateConfig(Path configFile) {
         try {
             Files.createDirectories(configFile.getParent());
             String template = "{\n"
-                    + "  \"_comment\": \"Add player name -> online UUID mappings here. UUID must be version 4 (from Mojang).\",\n"
+                    + "  \"_comment\": \"Add player name -> online UUID mappings here. UUID must be the player's Mojang online UUID.\",\n"
                     + "  \"_example\": \"ddcbc31d-d299-4a67-a278-915363363004\"\n"
-                    + "}";
+                    + "}\n";
             Files.writeString(configFile, template, StandardCharsets.UTF_8);
-            LOGGER.info("[AuthOfflineBridge] Created template UUID config at: {}", configFile);
+            Authofflinebridge.LOGGER.info("Created template UUID config at: {}", configFile);
         } catch (IOException e) {
-            LOGGER.warn("[AuthOfflineBridge] Failed to create template config: {}", configFile, e);
+            Authofflinebridge.LOGGER.warn("Failed to create template config: {}", configFile, e);
         }
     }
 
-    /** 获取缓存的映射表 */
     public static Map<String, UUID> getOnlineUUIDMap() {
         return cachedOnlineMap;
     }
 
-    /**
-     * 根据玩家名计算离线模式下的UUID（与Minecraft服务端算法一致）。
-     */
     public static UUID getOfflineUUID(String playerName) {
         return UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes(StandardCharsets.UTF_8));
     }
 
-    /**
-     * 打印映射表到控制台，用于调试。
-     */
+    public static void migrateOfflinePlayerFiles(MinecraftServer server, String playerName, UUID onlineUUID) {
+        UUID offlineUUID = getOfflineUUID(playerName);
+
+        copyOnce(
+                server.getWorldPath(LevelResource.PLAYER_DATA_DIR),
+                offlineUUID + ".dat",
+                onlineUUID + ".dat",
+                playerName,
+                "player data"
+        );
+        copyOnce(
+                server.getWorldPath(LevelResource.PLAYER_ADVANCEMENTS_DIR),
+                offlineUUID + ".json",
+                onlineUUID + ".json",
+                playerName,
+                "advancements"
+        );
+        copyOnce(
+                server.getWorldPath(LevelResource.PLAYER_STATS_DIR),
+                offlineUUID + ".json",
+                onlineUUID + ".json",
+                playerName,
+                "stats"
+        );
+    }
+
+    private static void copyOnce(Path directory, String offlineFileName, String onlineFileName, String playerName, String label) {
+        Path source = directory.resolve(offlineFileName);
+        Path target = directory.resolve(onlineFileName);
+        Path marker = directory.resolve(onlineFileName + ".authofflinebridge.migrated");
+
+        if (!Files.exists(source)) {
+            return;
+        }
+
+        if (Files.exists(marker) && Files.exists(target)) {
+            return;
+        }
+
+        try {
+            Files.createDirectories(directory);
+
+            if (Files.exists(target)) {
+                if (Files.mismatch(source, target) == -1L) {
+                    Files.writeString(marker, "Already matched " + source.getFileName() + System.lineSeparator(), StandardCharsets.UTF_8);
+                    return;
+                }
+
+                Path backup = directory.resolve(onlineFileName + ".authofflinebridge.bak");
+                if (Files.exists(backup)) {
+                    backup = directory.resolve(onlineFileName + ".authofflinebridge." + System.currentTimeMillis() + ".bak");
+                }
+                Files.copy(target, backup, StandardCopyOption.COPY_ATTRIBUTES);
+                Authofflinebridge.LOGGER.info("Backed up existing {} for {} to {}", label, playerName, backup);
+            }
+
+            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
+            Files.writeString(marker, "Copied from " + source.getFileName() + System.lineSeparator(), StandardCharsets.UTF_8);
+            Authofflinebridge.LOGGER.info("Copied offline {} for {} from {} to {}", label, playerName, source, target);
+        } catch (IOException e) {
+            Authofflinebridge.LOGGER.error("Failed to copy offline {} for {} from {} to {}", label, playerName, source, target, e);
+        }
+    }
+
     public static void printMappings() {
-        LOGGER.info("[AuthOfflineBridge] ===== Player UUID Mapping Table =====");
+        Authofflinebridge.LOGGER.info("===== Player UUID Mapping Table =====");
         for (Map.Entry<String, UUID> entry : cachedOnlineMap.entrySet()) {
             String name = entry.getKey();
             UUID onlineUUID = entry.getValue();
             UUID offlineUUID = getOfflineUUID(name);
-            LOGGER.info("[AuthOfflineBridge] Name: {} | Online UUID: {} | Offline UUID: {}", name, onlineUUID, offlineUUID);
+            Authofflinebridge.LOGGER.info("Name: {} | Online UUID: {} | Offline UUID: {}", name, onlineUUID, offlineUUID);
         }
-        LOGGER.info("[AuthOfflineBridge] ===== End of Table ({} entries) =====", cachedOnlineMap.size());
+        Authofflinebridge.LOGGER.info("===== End of Table ({} entries) =====", cachedOnlineMap.size());
     }
 }
